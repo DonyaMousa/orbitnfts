@@ -16,7 +16,12 @@
     "test:setup": "concurrently \"npm run hardhat:node\" \"sleep 5 && npm run hardhat:deploy\"",
     "test:server": "cross-env USE_TEST_NETWORK=true nodemon server/index.js",
     "mint:nft": "hardhat run scripts/mint-nft.cjs --network localhost --config hardhat.config.cjs",
-    "view:nfts": "hardhat run scripts/view-nfts.cjs --network localhost --config hardhat.config.cjs"
+    "view:nfts": "hardhat run scripts/view-nfts.cjs --network localhost --config hardhat.config.cjs",
+    "deploy:blog": "hardhat run scripts/deploy-blog.cjs --network localhost --config hardhat.config.cjs",
+    "test:blog:contract": "hardhat run scripts/test-blog-post.cjs --network localhost --config hardhat.config.cjs",
+    "test:blog:api": "node scripts/test-blog-api.js",
+    "test:blog:quick": "node scripts/test-blog-quick.js",
+    "test:all": "concurrently \"npm run test:server\" \"sleep 3 && npm run test:blog:quick\""
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.3",
@@ -81,6 +86,7 @@
     "hardhat": "^2.22.19",
     "husky": "^9.0.11",
     "lint-staged": "^15.2.2",
+    "node-fetch": "^2.6.7",
     "nodemon": "^3.1.0",
     "postcss": "^8.4.35",
     "prettier": "^3.2.5",

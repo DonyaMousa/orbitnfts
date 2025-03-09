@@ -7,6 +7,10 @@ import {
   updateUserProfile,
 } from "../controllers/authController.js";
 import { protect } from "../middleware/authMiddleware.js";
+import dotenv from "dotenv";
+import { authenticateToken, generateTestToken } from "../middleware/auth";
+
+dotenv.config();
 
 const router = express.Router();
 
@@ -63,36 +67,70 @@ router.post("/register", (req, res) => {
   }
 });
 
-// Login route
+// Development endpoint to get a test token
+router.get("/test-token", (req, res) => {
+  // Only allow in development environment
+  if (process.env.NODE_ENV !== "production") {
+    const token = generateTestToken();
+
+    if (token) {
+      return res.status(200).json({
+        success: true,
+        token,
+        message: "Test token generated successfully. For development use only.",
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: "Failed to generate test token",
+      });
+    }
+  } else {
+    return res.status(403).json({
+      success: false,
+      error: "This endpoint is only available in development environment",
+    });
+  }
+});
+
+// Mock login endpoint for testing
 router.post("/login", (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Find user
-    const user = users.find((user) => user.email === email);
-    if (!user || user.password !== password) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
+    // For testing, accept any credentials
+    // In production, you would validate against a database
 
-    // Generate JWT token
+    // Create a test user
+    const testUser = {
+      userId: "user_" + Date.now(),
+      walletAddress: "0x" + Math.random().toString(16).substring(2, 42),
+      username: email
+        ? email.split("@")[0]
+        : "User_" + Date.now().toString().substring(7),
+      email: email || "test@example.com",
+      avatar: `https://api.dicebear.com/6.x/personas/svg?seed=${Date.now()}`,
+    };
+
+    // Generate token
     const token = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET || "test_secret_key",
+      testUser,
+      process.env.JWT_SECRET || "fallback_secret_for_development",
       { expiresIn: "1h" }
     );
 
-    res.status(200).json({
-      message: "Login successful",
+    return res.status(200).json({
+      success: true,
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      },
+      data: testUser,
+      message: "Login successful",
     });
   } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Error in login:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Login failed",
+    });
   }
 });
 

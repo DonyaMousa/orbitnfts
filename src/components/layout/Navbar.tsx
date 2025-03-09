@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Orbit, Menu, X, Search, Sun, Moon, Wallet } from "lucide-react";
+import {
+  Orbit,
+  Menu,
+  X,
+  Search,
+  Sun,
+  Moon,
+  Wallet,
+  MessageSquare,
+  BookOpen,
+} from "lucide-react";
 import Button from "../ui/Button";
 import { useUI } from "../../contexts/UIContext";
 import { useWallet } from "../../contexts/WalletContext";
@@ -54,6 +64,11 @@ const Navbar: React.FC = () => {
     { name: "Home", path: "/" },
     { name: "Explore", path: "/explore" },
     { name: "Create", path: "/create" },
+    {
+      name: "Blog",
+      path: "/blog",
+      icon: <MessageSquare className="h-4 w-4" />,
+    },
   ];
 
   return (
@@ -87,13 +102,20 @@ const Navbar: React.FC = () => {
               <Link
                 key={link.path}
                 to={link.path}
-                className={`text-sm font-medium transition-colors hover:text-primary-500 ${
-                  location.pathname === link.path
+                className={`text-sm font-medium transition-colors hover:text-primary-500 flex items-center gap-1.5 ${
+                  location.pathname === link.path ||
+                  location.pathname.startsWith(`${link.path}/`)
                     ? "text-primary-500"
                     : "text-gray-700 dark:text-gray-300"
                 }`}
               >
+                {link.icon && link.icon}
                 {link.name}
+                {link.path === "/blog" && (
+                  <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary-500 text-white">
+                    New
+                  </span>
+                )}
               </Link>
             ))}
           </nav>
@@ -138,6 +160,15 @@ const Navbar: React.FC = () => {
                 >
                   {formatAddress(account || "")}
                 </Button>
+                <Link to="/blog/my-posts">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={<BookOpen className="h-4 w-4" />}
+                  >
+                    My Posts
+                  </Button>
+                </Link>
                 <Link to={`/profile/${account}`}>
                   <Button variant="primary" size="sm">
                     My Profile
@@ -201,14 +232,21 @@ const Navbar: React.FC = () => {
                   <Link
                     key={link.path}
                     to={link.path}
-                    className={`text-sm font-medium transition-colors ${
-                      location.pathname === link.path
+                    className={`text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                      location.pathname === link.path ||
+                      location.pathname.startsWith(`${link.path}/`)
                         ? "text-primary-500"
                         : "text-gray-700 dark:text-gray-300"
                     }`}
                     onClick={closeMobileMenu}
                   >
+                    {link.icon && link.icon}
                     {link.name}
+                    {link.path === "/blog" && (
+                      <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary-500 text-white">
+                        New
+                      </span>
+                    )}
                   </Link>
                 ))}
               </nav>
@@ -245,6 +283,16 @@ const Navbar: React.FC = () => {
                     >
                       {formatAddress(account || "")}
                     </Button>
+                    <Link to="/blog/my-posts" onClick={closeMobileMenu}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        fullWidth
+                        leftIcon={<BookOpen className="h-4 w-4" />}
+                      >
+                        My Posts
+                      </Button>
+                    </Link>
                     <Link to={`/profile/${account}`} onClick={closeMobileMenu}>
                       <Button variant="primary" size="sm" fullWidth>
                         My Profile

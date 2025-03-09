@@ -25,17 +25,34 @@ app.use(express.json({ limit: "50mb" }));
 
 // MongoDB connection
 const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://donyamousa:$orbitnfts@orbitnfts.0gtw2.mongodb.net/?retryWrites=true&w=majority&appName=orbitnfts";
+  process.env.MONGODB_URI || "mongodb://localhost:27017/orbitnfts";
+
+// Define port with fallback options
+const PORT = process.env.PORT || 5001;
+
+// In-memory storage as fallback
+let useInMemoryOnly = false;
+let server = null;
 
 // Connect to MongoDB
 const connectDB = async () => {
   try {
-    await mongoose.connect(MONGODB_URI);
+    // Set mongoose options to handle connection issues
+    const options = {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000, // Timeout after 5 seconds
+      retryWrites: true,
+    };
+
+    await mongoose.connect(MONGODB_URI, options);
     console.log(`MongoDB connected: ${mongoose.connection.host}`);
+    return true;
   } catch (error) {
     console.error(`MongoDB connection error: ${error.message}`);
-    process.exit(1);
+    console.log("Falling back to in-memory storage only");
+    useInMemoryOnly = true;
+    return false;
   }
 };
 
@@ -67,6 +84,27 @@ const userSchema = new mongoose.Schema(
       enum: ["user", "admin"],
       default: "user",
     },
+    // Track references to NFTs created and owned by this user
+    createdNFTs: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "NFT",
+      },
+    ],
+    ownedNFTs: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "NFT",
+      },
+    ],
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
   {
     timestamps: true,
@@ -78,13 +116,16 @@ const nftSchema = new mongoose.Schema(
     tokenId: {
       type: String,
       required: true,
+      unique: true,
     },
     name: {
       type: String,
       required: true,
+      trim: true,
     },
     description: {
       type: String,
+      trim: true,
     },
     imageUrl: {
       type: String,
@@ -96,10 +137,21 @@ const nftSchema = new mongoose.Schema(
     creator: {
       type: String,
       required: true,
+      index: true,
     },
     owner: {
       type: String,
       required: true,
+      index: true,
+    },
+    // References to User documents
+    creatorRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    ownerRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
     price: {
       type: Number,
@@ -113,12 +165,29 @@ const nftSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isAuction: {
+      type: Boolean,
+      default: false,
+    },
+    auctionEndTime: {
+      type: Date,
+    },
+    highestBid: {
+      type: Number,
+    },
+    highestBidder: {
+      type: String,
+    },
     category: {
       type: String,
       default: "Art",
     },
     collection: {
       type: String,
+    },
+    blockchain: {
+      type: String,
+      default: "Ethereum",
     },
     likes: {
       type: Number,
@@ -128,27 +197,32 @@ const nftSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    attributes: [
-      {
-        trait_type: String,
-        value: String,
-        rarity: Number,
-      },
-    ],
     activities: [
       {
         type: {
           type: String,
-          enum: ["Mint", "Listing", "Sale", "Transfer", "Bid"],
+          enum: ["mint", "transfer", "list", "sell", "bid", "auction"],
         },
-        user: String,
-        price: Number,
+        user: {
+          type: String,
+        },
+        price: {
+          type: Number,
+        },
         date: {
           type: Date,
           default: Date.now,
         },
       },
     ],
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
   {
     timestamps: true,
@@ -246,6 +320,11 @@ const nfts = [
 ];
 const users = [];
 
+// Helper function for default avatar URL
+const getDefaultAvatar = (address) => {
+  return `https://api.dicebear.com/6.x/identicon/svg?seed=${address}`;
+};
+
 // Root route
 app.get("/", (req, res) => {
   res.json({
@@ -272,20 +351,139 @@ app.post("/api/nfts/mint", async (req, res) => {
       });
     }
 
+    if (!creator) {
+      return res.status(400).json({
+        success: false,
+        message: "Creator address is required",
+      });
+    }
+
     // Generate unique ID
     const tokenId = Math.floor(Math.random() * 1000000).toString();
-
     console.log(`Generated NFT Token ID: ${tokenId}`);
 
-    // Create a new NFT
-    const newNFT = {
+    if (!useInMemoryOnly) {
+      try {
+        // Find or create user
+        let user = await User.findOne({ address: creator }).catch(() => null);
+
+        if (!user) {
+          // Create a new user
+          const newUser = new User({
+            address: creator,
+            username: `User_${creator.substring(0, 6)}`,
+            avatarUrl: getDefaultAvatar(creator),
+            bio: "NFT enthusiast and collector",
+            isVerified: false,
+            role: "user",
+            createdNFTs: [],
+            ownedNFTs: [],
+          });
+
+          user = await newUser.save();
+          console.log(`Created new user in MongoDB: ${user._id}`);
+        }
+
+        // Create the NFT with references to the user
+        const nftData = {
+          tokenId,
+          name,
+          description: description || "",
+          imageUrl: image,
+          metadataUrl: `ipfs://mock-metadata-${tokenId}`,
+          creator: creator,
+          owner: creator,
+          creatorRef: user._id, // Reference to user
+          ownerRef: user._id, // Reference to user
+          price: parseFloat(price || "0.01"),
+          currency: "ETH",
+          isListed: true,
+          category: category || "Art",
+          collection: collection || null,
+          likes: 0,
+          views: 0,
+          blockchain: "Ethereum",
+          activities: [
+            {
+              type: "mint",
+              user: creator,
+              date: new Date(),
+            },
+            {
+              type: "list",
+              user: creator,
+              price: parseFloat(price || "0.01"),
+              date: new Date(),
+            },
+          ],
+        };
+
+        // Save new NFT
+        const nftDoc = new NFT(nftData);
+        const savedNFT = await nftDoc.save();
+        console.log(`NFT saved to MongoDB with ID: ${savedNFT._id}`);
+
+        // Update user's created and owned NFTs arrays
+        user.createdNFTs.push(savedNFT._id);
+        user.ownedNFTs.push(savedNFT._id);
+        await user.save();
+        console.log(`Updated user ${user._id} with new NFT references`);
+
+        // Create response with creator info
+        const nftWithCreatorInfo = {
+          ...savedNFT.toObject(),
+          creatorName: user.username,
+          creatorImage: user.avatarUrl,
+          creatorIsVerified: user.isVerified,
+          ownerName: user.username,
+          ownerImage: user.avatarUrl,
+          ownerIsVerified: user.isVerified,
+        };
+
+        return res.status(201).json({
+          success: true,
+          message: "NFT created and saved to database with user associations",
+          nft: nftWithCreatorInfo,
+        });
+      } catch (error) {
+        console.error(`MongoDB error: ${error.message}`);
+        // Continue to fallback
+      }
+    }
+
+    // Fallback to in-memory storage if MongoDB fails or is disabled
+    console.log("Using in-memory storage for NFT creation");
+
+    // Find or create the user in memory
+    let memoryUser = users.find(
+      (u) => u.address && u.address.toLowerCase() === creator.toLowerCase()
+    );
+
+    if (!memoryUser) {
+      memoryUser = {
+        _id: uuidv4(),
+        address: creator,
+        username: `User_${creator.substring(0, 6)}`,
+        avatarUrl: getDefaultAvatar(creator),
+        bio: "NFT enthusiast and collector",
+        isVerified: false,
+        role: "user",
+        createdNFTs: [],
+        ownedNFTs: [],
+      };
+      users.push(memoryUser);
+    }
+
+    // Create the NFT in memory
+    const fallbackNFT = {
+      _id: uuidv4(),
       tokenId,
       name,
       description: description || "",
       imageUrl: image,
-      metadataUrl: "ipfs://mock-metadata-url",
-      creator: creator || "0x96acdd1b1eb64f311505d691026c6df5ab75006e",
-      owner: creator || "0x96acdd1b1eb64f311505d691026c6df5ab75006e",
+      metadataUrl: `ipfs://mock-metadata-${tokenId}`,
+      creator: creator,
+      owner: creator,
       price: parseFloat(price || "0.01"),
       currency: "ETH",
       isListed: true,
@@ -293,50 +491,56 @@ app.post("/api/nfts/mint", async (req, res) => {
       collection: collection || null,
       likes: 0,
       views: 0,
-      attributes: [],
+      blockchain: "Ethereum",
+      createdAt: new Date().toISOString(),
       activities: [
         {
-          type: "Mint",
-          user: creator || "0x96acdd1b1eb64f311505d691026c6df5ab75006e",
+          type: "mint",
+          user: creator,
           date: new Date(),
         },
         {
-          type: "Listing",
-          user: creator || "0x96acdd1b1eb64f311505d691026c6df5ab75006e",
+          type: "list",
+          user: creator,
           price: parseFloat(price || "0.01"),
           date: new Date(),
         },
       ],
     };
 
-    try {
-      // Try to save to MongoDB
-      const nftDoc = new NFT(newNFT);
-      const savedNFT = await nftDoc.save();
-      console.log(`NFT saved to MongoDB with ID: ${savedNFT._id}`);
+    // Add NFT to in-memory array
+    nfts.push(fallbackNFT);
+    console.log(`NFT saved to memory with ID: ${fallbackNFT._id}`);
 
-      // Return the saved NFT
-      return res.status(201).json({
-        success: true,
-        message: "NFT created and saved to database",
-        nft: savedNFT,
-      });
-    } catch (dbError) {
-      console.error("Error saving NFT to database:", dbError);
-
-      // Fallback to in-memory storage
-      const fallbackNFT = { _id: uuidv4(), ...newNFT };
-      nfts.push(fallbackNFT);
-      console.log(`Fallback: NFT saved to memory with ID: ${fallbackNFT._id}`);
-
-      return res.status(201).json({
-        success: true,
-        message: "NFT created (fallback to in-memory storage)",
-        nft: fallbackNFT,
-      });
+    // Add references to the user's arrays
+    if (!memoryUser.createdNFTs) {
+      memoryUser.createdNFTs = [];
     }
+    if (!memoryUser.ownedNFTs) {
+      memoryUser.ownedNFTs = [];
+    }
+
+    memoryUser.createdNFTs.push(fallbackNFT._id);
+    memoryUser.ownedNFTs.push(fallbackNFT._id);
+
+    // Add creator info to the response
+    const nftWithCreatorInfo = {
+      ...fallbackNFT,
+      creatorName: memoryUser.username,
+      creatorImage: memoryUser.avatarUrl,
+      creatorIsVerified: memoryUser.isVerified,
+      ownerName: memoryUser.username,
+      ownerImage: memoryUser.avatarUrl,
+      ownerIsVerified: memoryUser.isVerified,
+    };
+
+    return res.status(201).json({
+      success: true,
+      message: "NFT created and saved to memory",
+      nft: nftWithCreatorInfo,
+    });
   } catch (error) {
-    console.error("Error creating NFT:", error);
+    console.error(`Error creating NFT: ${error.message}`);
     return res.status(500).json({
       success: false,
       message: "Failed to create NFT",
@@ -359,10 +563,39 @@ app.get("/api/nfts/:id", async (req, res) => {
       nft.views += 1;
       await nft.save();
 
+      // Get creator profile info if available
+      let creatorProfile = null;
+      if (nft.creator) {
+        creatorProfile = await User.findOne({
+          walletAddress: nft.creator,
+        }).catch(() => null);
+      }
+
+      // Get owner profile info if available
+      let ownerProfile = null;
+      if (nft.owner) {
+        ownerProfile = await User.findOne({ walletAddress: nft.owner }).catch(
+          () => null
+        );
+      }
+
+      // Merge creator and owner profile info with NFT data
+      const nftWithProfileInfo = {
+        ...nft.toObject(),
+        creatorName: creatorProfile?.username || null,
+        creatorImage: creatorProfile?.avatarUrl || null,
+        creatorBio: creatorProfile?.bio || null,
+        creatorIsVerified: creatorProfile?.isVerified || false,
+        ownerName: ownerProfile?.username || null,
+        ownerImage: ownerProfile?.avatarUrl || null,
+        ownerBio: ownerProfile?.bio || null,
+        ownerIsVerified: ownerProfile?.isVerified || false,
+      };
+
       console.log(`NFT found in MongoDB: ${nft.name}`);
       return res.json({
         success: true,
-        nft,
+        nft: nftWithProfileInfo,
       });
     } else {
       // Try to find by tokenId in MongoDB
@@ -373,10 +606,39 @@ app.get("/api/nfts/:id", async (req, res) => {
         nftByTokenId.views += 1;
         await nftByTokenId.save();
 
+        // Get creator profile info if available
+        let creatorProfile = null;
+        if (nftByTokenId.creator) {
+          creatorProfile = await User.findOne({
+            walletAddress: nftByTokenId.creator,
+          }).catch(() => null);
+        }
+
+        // Get owner profile info if available
+        let ownerProfile = null;
+        if (nftByTokenId.owner) {
+          ownerProfile = await User.findOne({
+            walletAddress: nftByTokenId.owner,
+          }).catch(() => null);
+        }
+
+        // Merge creator and owner profile info with NFT data
+        const nftWithProfileInfo = {
+          ...nftByTokenId.toObject(),
+          creatorName: creatorProfile?.username || null,
+          creatorImage: creatorProfile?.avatarUrl || null,
+          creatorBio: creatorProfile?.bio || null,
+          creatorIsVerified: creatorProfile?.isVerified || false,
+          ownerName: ownerProfile?.username || null,
+          ownerImage: ownerProfile?.avatarUrl || null,
+          ownerBio: ownerProfile?.bio || null,
+          ownerIsVerified: ownerProfile?.isVerified || false,
+        };
+
         console.log(`NFT found by tokenId in MongoDB: ${nftByTokenId.name}`);
         return res.json({
           success: true,
-          nft: nftByTokenId,
+          nft: nftWithProfileInfo,
         });
       }
     }
@@ -402,11 +664,41 @@ app.get("/api/nfts/:id", async (req, res) => {
 
     // Increment views
     memoryNft.views += 1;
+
+    // Get creator profile info if available
+    let creatorProfile = null;
+    if (memoryNft.creator) {
+      creatorProfile = await User.findOne({
+        walletAddress: memoryNft.creator,
+      }).catch(() => null);
+    }
+
+    // Get owner profile info if available
+    let ownerProfile = null;
+    if (memoryNft.owner) {
+      ownerProfile = await User.findOne({
+        walletAddress: memoryNft.owner,
+      }).catch(() => null);
+    }
+
+    // Add creator and owner profile info to NFT data
+    const nftWithProfileInfo = {
+      ...memoryNft,
+      creatorName: creatorProfile?.username || null,
+      creatorImage: creatorProfile?.avatarUrl || null,
+      creatorBio: creatorProfile?.bio || null,
+      creatorIsVerified: creatorProfile?.isVerified || false,
+      ownerName: ownerProfile?.username || null,
+      ownerImage: ownerProfile?.avatarUrl || null,
+      ownerBio: ownerProfile?.bio || null,
+      ownerIsVerified: ownerProfile?.isVerified || false,
+    };
+
     console.log(`NFT found in memory: ${memoryNft.name}`);
 
     return res.json({
       success: true,
-      nft: memoryNft,
+      nft: nftWithProfileInfo,
     });
   } catch (error) {
     console.error(`Error getting NFT by ID: ${error.message}`);
@@ -424,33 +716,179 @@ app.get("/api/nfts/owner/:address", async (req, res) => {
   console.log(`Getting NFTs for owner: ${address}`);
 
   try {
-    // Try to find in MongoDB first
-    const dbNfts = await NFT.find({ owner: address }).catch(() => []);
+    if (!useInMemoryOnly) {
+      // First, find the user
+      const user = await User.findOne({ address }).catch(() => null);
 
-    if (dbNfts.length > 0) {
-      console.log(
-        `Found ${dbNfts.length} NFTs in MongoDB for owner: ${address}`
-      );
-      return res.json({
-        success: true,
-        count: dbNfts.length,
-        nfts: dbNfts,
-      });
+      if (user) {
+        // Populate the user's owned NFTs
+        await user.populate("ownedNFTs");
+
+        if (user.ownedNFTs && user.ownedNFTs.length > 0) {
+          // Get profile info for these NFTs' creators
+          const nftsWithCreatorInfo = await Promise.all(
+            user.ownedNFTs.map(async (nft) => {
+              // Find creator info if available and not the same as owner
+              let creatorProfile = null;
+              if (nft.creator && nft.creator !== address) {
+                creatorProfile = await User.findOne({
+                  address: nft.creator,
+                }).catch(() => null);
+              }
+
+              // Convert mongoose document to plain object and add creator info
+              const nftObject = nft.toObject ? nft.toObject() : nft;
+              return {
+                ...nftObject,
+                creatorName: creatorProfile?.username || null,
+                creatorImage: creatorProfile?.avatarUrl || null,
+                creatorIsVerified: creatorProfile?.isVerified || false,
+                ownerName: user.username,
+                ownerImage: user.avatarUrl,
+                ownerIsVerified: user.isVerified,
+              };
+            })
+          );
+
+          console.log(
+            `Found ${nftsWithCreatorInfo.length} owned NFTs for ${address} using User.ownedNFTs`
+          );
+          return res.json({
+            success: true,
+            nfts: nftsWithCreatorInfo,
+          });
+        }
+
+        // Fallback: direct query on NFT collection
+        console.log("User.ownedNFTs empty, falling back to direct NFT query");
+      }
+
+      // Direct query on NFT collection if user not found or ownedNFTs empty
+      const nfts = await NFT.find({ owner: address }).catch(() => []);
+
+      if (nfts.length > 0) {
+        // Get creator profiles for these NFTs
+        const nftsWithCreatorInfo = await Promise.all(
+          nfts.map(async (nft) => {
+            const creatorProfile =
+              nft.creator && nft.creator !== address
+                ? await User.findOne({ address: nft.creator }).catch(() => null)
+                : null;
+
+            const ownerProfile = await User.findOne({ address }).catch(
+              () => null
+            );
+
+            return {
+              ...nft.toObject(),
+              creatorName: creatorProfile?.username || null,
+              creatorImage: creatorProfile?.avatarUrl || null,
+              creatorIsVerified: creatorProfile?.isVerified || false,
+              ownerName: ownerProfile?.username || null,
+              ownerImage: ownerProfile?.avatarUrl || null,
+              ownerIsVerified: ownerProfile?.isVerified || false,
+            };
+          })
+        );
+
+        console.log(
+          `Found ${nftsWithCreatorInfo.length} NFTs owned by ${address} via direct NFT query`
+        );
+        return res.json({
+          success: true,
+          nfts: nftsWithCreatorInfo,
+        });
+      }
     }
 
-    // If none found in MongoDB, use in-memory
-    console.log("No NFTs found in MongoDB, using in-memory data");
-    const memoryNfts = nfts.filter(
-      (nft) => nft.owner.toLowerCase() === address.toLowerCase()
+    // In-memory fallback if MongoDB failed or returned no results
+    console.log("Looking for owned NFTs in memory storage");
+
+    // Find the user in memory
+    const memoryUser = users.find(
+      (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
     );
+
+    // If user has ownedNFTs references, use those
+    if (memoryUser && memoryUser.ownedNFTs && memoryUser.ownedNFTs.length > 0) {
+      const userOwnedNFTs = memoryUser.ownedNFTs
+        .map((nftId) => nfts.find((nft) => nft._id === nftId))
+        .filter(Boolean); // Remove any undefined entries
+
+      if (userOwnedNFTs.length > 0) {
+        console.log(
+          `Found ${userOwnedNFTs.length} owned NFTs via in-memory user references`
+        );
+
+        // Add creator and owner info
+        const nftsWithCreatorInfo = userOwnedNFTs.map((nft) => {
+          const creatorUser = nft.creator
+            ? users.find(
+                (u) =>
+                  u.address &&
+                  u.address.toLowerCase() === nft.creator.toLowerCase()
+              )
+            : null;
+
+          return {
+            ...nft,
+            creatorName: creatorUser?.username || null,
+            creatorImage: creatorUser?.avatarUrl || null,
+            creatorIsVerified: creatorUser?.isVerified || false,
+            ownerName: memoryUser.username,
+            ownerImage: memoryUser.avatarUrl,
+            ownerIsVerified: memoryUser.isVerified,
+          };
+        });
+
+        return res.json({
+          success: true,
+          nfts: nftsWithCreatorInfo,
+        });
+      }
+    }
+
+    // Direct query on in-memory NFTs
+    const memoryNFTs = nfts.filter(
+      (nft) => nft.owner && nft.owner.toLowerCase() === address.toLowerCase()
+    );
+
+    console.log(
+      `Found ${memoryNFTs.length} owned NFTs via direct in-memory search`
+    );
+
+    // Add creator info
+    const nftsWithInfo = memoryNFTs.map((nft) => {
+      const creatorUser = users.find(
+        (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
+      );
+
+      const ownerUser =
+        nft.owner && nft.owner !== address
+          ? users.find(
+              (u) =>
+                u.address && u.address.toLowerCase() === nft.owner.toLowerCase()
+            )
+          : creatorUser;
+
+      return {
+        ...nft,
+        creatorName: creatorUser?.username || null,
+        creatorImage: creatorUser?.avatarUrl || null,
+        creatorIsVerified: creatorUser?.isVerified || false,
+        ownerName: ownerUser?.username || creatorUser?.username || null,
+        ownerImage: ownerUser?.avatarUrl || creatorUser?.avatarUrl || null,
+        ownerIsVerified:
+          ownerUser?.isVerified || creatorUser?.isVerified || false,
+      };
+    });
 
     return res.json({
       success: true,
-      count: memoryNfts.length,
-      nfts: memoryNfts,
+      nfts: nftsWithInfo,
     });
   } catch (error) {
-    console.error(`Error getting NFTs by owner: ${error.message}`);
+    console.error(`Error getting NFTs for owner: ${error.message}`);
     return res.status(500).json({
       success: false,
       message: "Error fetching NFTs",
@@ -459,39 +897,193 @@ app.get("/api/nfts/owner/:address", async (req, res) => {
   }
 });
 
-// Get NFTs created by a user
+// Get NFTs by creator
 app.get("/api/nfts/creator/:address", async (req, res) => {
   const address = req.params.address;
   console.log(`Getting NFTs created by: ${address}`);
 
   try {
-    // Try to find in MongoDB first
-    const dbNfts = await NFT.find({ creator: address }).catch(() => []);
+    if (!useInMemoryOnly) {
+      // First, find the user
+      const user = await User.findOne({ address }).catch(() => null);
 
-    if (dbNfts.length > 0) {
-      console.log(
-        `Found ${dbNfts.length} NFTs in MongoDB created by: ${address}`
-      );
-      return res.json({
-        success: true,
-        count: dbNfts.length,
-        nfts: dbNfts,
-      });
+      if (user) {
+        // Populate the user's created NFTs
+        await user.populate("createdNFTs");
+
+        if (user.createdNFTs && user.createdNFTs.length > 0) {
+          // For each NFT, find owner info if different from creator
+          const nftsWithOwnerInfo = await Promise.all(
+            user.createdNFTs.map(async (nft) => {
+              // Find owner info if different from creator
+              let ownerProfile = null;
+              if (nft.owner && nft.owner !== address) {
+                ownerProfile = await User.findOne({ address: nft.owner }).catch(
+                  () => null
+                );
+              }
+
+              // Convert mongoose document to plain object and add profile info
+              const nftObject = nft.toObject ? nft.toObject() : nft;
+              return {
+                ...nftObject,
+                creatorName: user.username,
+                creatorImage: user.avatarUrl,
+                creatorIsVerified: user.isVerified,
+                ownerName: ownerProfile?.username || user.username,
+                ownerImage: ownerProfile?.avatarUrl || user.avatarUrl,
+                ownerIsVerified: ownerProfile?.isVerified || user.isVerified,
+              };
+            })
+          );
+
+          console.log(
+            `Found ${nftsWithOwnerInfo.length} created NFTs for ${address} using User.createdNFTs`
+          );
+          return res.json({
+            success: true,
+            nfts: nftsWithOwnerInfo,
+          });
+        }
+
+        console.log("User.createdNFTs empty, falling back to direct NFT query");
+      }
+
+      // Direct query on NFT collection if user not found or createdNFTs empty
+      const nfts = await NFT.find({ creator: address }).catch(() => []);
+
+      if (nfts.length > 0) {
+        // Get creator and owner profiles
+        const nftsWithOwnerInfo = await Promise.all(
+          nfts.map(async (nft) => {
+            const ownerProfile =
+              nft.owner && nft.owner !== address
+                ? await User.findOne({ address: nft.owner }).catch(() => null)
+                : null;
+
+            const creatorProfile = await User.findOne({ address }).catch(
+              () => null
+            );
+
+            return {
+              ...nft.toObject(),
+              creatorName: creatorProfile?.username || null,
+              creatorImage: creatorProfile?.avatarUrl || null,
+              creatorIsVerified: creatorProfile?.isVerified || false,
+              ownerName:
+                ownerProfile?.username || creatorProfile?.username || null,
+              ownerImage:
+                ownerProfile?.avatarUrl || creatorProfile?.avatarUrl || null,
+              ownerIsVerified:
+                ownerProfile?.isVerified || creatorProfile?.isVerified || false,
+            };
+          })
+        );
+
+        console.log(
+          `Found ${nftsWithOwnerInfo.length} NFTs created by ${address} via direct NFT query`
+        );
+        return res.json({
+          success: true,
+          nfts: nftsWithOwnerInfo,
+        });
+      }
     }
 
-    // If none found in MongoDB, use in-memory
-    console.log("No NFTs found in MongoDB, using in-memory data");
-    const memoryNfts = nfts.filter(
-      (nft) => nft.creator.toLowerCase() === address.toLowerCase()
+    // In-memory fallback if MongoDB failed or returned no results
+    console.log("Looking for created NFTs in memory storage");
+
+    // Find the user in memory
+    const memoryUser = users.find(
+      (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
     );
+
+    // If user has createdNFTs references, use those
+    if (
+      memoryUser &&
+      memoryUser.createdNFTs &&
+      memoryUser.createdNFTs.length > 0
+    ) {
+      const userCreatedNFTs = memoryUser.createdNFTs
+        .map((nftId) => nfts.find((nft) => nft._id === nftId))
+        .filter(Boolean); // Remove any undefined entries
+
+      if (userCreatedNFTs.length > 0) {
+        console.log(
+          `Found ${userCreatedNFTs.length} created NFTs via in-memory user references`
+        );
+
+        // Add creator and owner info
+        const nftsWithOwnerInfo = userCreatedNFTs.map((nft) => {
+          const ownerUser =
+            nft.owner && nft.owner !== address
+              ? users.find(
+                  (u) =>
+                    u.address &&
+                    u.address.toLowerCase() === nft.owner.toLowerCase()
+                )
+              : memoryUser;
+
+          return {
+            ...nft,
+            creatorName: memoryUser.username,
+            creatorImage: memoryUser.avatarUrl,
+            creatorIsVerified: memoryUser.isVerified,
+            ownerName: ownerUser?.username || memoryUser.username,
+            ownerImage: ownerUser?.avatarUrl || memoryUser.avatarUrl,
+            ownerIsVerified: ownerUser?.isVerified || memoryUser.isVerified,
+          };
+        });
+
+        return res.json({
+          success: true,
+          nfts: nftsWithOwnerInfo,
+        });
+      }
+    }
+
+    // Direct query on in-memory NFTs
+    const memoryNFTs = nfts.filter(
+      (nft) =>
+        nft.creator && nft.creator.toLowerCase() === address.toLowerCase()
+    );
+
+    console.log(
+      `Found ${memoryNFTs.length} created NFTs via direct in-memory search`
+    );
+
+    // Add creator and owner info
+    const nftsWithInfo = memoryNFTs.map((nft) => {
+      const creatorUser = users.find(
+        (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
+      );
+
+      const ownerUser =
+        nft.owner && nft.owner !== address
+          ? users.find(
+              (u) =>
+                u.address && u.address.toLowerCase() === nft.owner.toLowerCase()
+            )
+          : creatorUser;
+
+      return {
+        ...nft,
+        creatorName: creatorUser?.username || null,
+        creatorImage: creatorUser?.avatarUrl || null,
+        creatorIsVerified: creatorUser?.isVerified || false,
+        ownerName: ownerUser?.username || creatorUser?.username || null,
+        ownerImage: ownerUser?.avatarUrl || creatorUser?.avatarUrl || null,
+        ownerIsVerified:
+          ownerUser?.isVerified || creatorUser?.isVerified || false,
+      };
+    });
 
     return res.json({
       success: true,
-      count: memoryNfts.length,
-      nfts: memoryNfts,
+      nfts: nftsWithInfo,
     });
   } catch (error) {
-    console.error(`Error getting NFTs by creator: ${error.message}`);
+    console.error(`Error getting NFTs for creator: ${error.message}`);
     return res.status(500).json({
       success: false,
       message: "Error fetching NFTs",
@@ -522,9 +1114,10 @@ app.post("/api/auth/wallet", async (req, res) => {
       const newUser = new User({
         address,
         username: `User_${address.substring(0, 6)}`,
-        avatarUrl: `https://avatars.dicebear.com/api/identicon/${address}.svg`,
+        avatarUrl: getDefaultAvatar(address),
         bio: "NFT enthusiast and digital art collector.",
-        isVerified: false,
+        isVerified: Math.random() > 0.8, // 20% chance to be verified
+        role: "user",
       });
 
       user = await newUser.save().catch((err) => {
@@ -556,9 +1149,10 @@ app.post("/api/auth/wallet", async (req, res) => {
         _id: uuidv4(),
         address,
         username: `User_${address.substring(0, 6)}`,
-        avatarUrl: `https://avatars.dicebear.com/api/identicon/${address}.svg`,
+        avatarUrl: getDefaultAvatar(address),
         bio: "NFT enthusiast and digital art collector.",
-        isVerified: false,
+        isVerified: Math.random() > 0.8, // 20% chance to be verified
+        role: "user",
         createdAt: new Date().toISOString(),
       };
       users.push(memoryUser);
@@ -581,130 +1175,95 @@ app.post("/api/auth/wallet", async (req, res) => {
   }
 });
 
-// Profile update endpoint
+// Update user profile
 app.post("/api/profile/update", async (req, res) => {
+  const { address, name, bio, image } = req.body;
+
+  if (!address) {
+    return res.status(400).json({
+      success: false,
+      message: "Wallet address is required",
+    });
+  }
+
   try {
-    console.log("Profile update request received");
-    const { name, bio, image, address } = req.body;
+    let user;
 
-    if (!address) {
-      console.log("Profile update failed: No address provided");
-      return res.status(400).json({
-        success: false,
-        message: "Wallet address is required",
-      });
-    }
+    // Only try to use MongoDB if we're not in memory-only mode
+    if (!useInMemoryOnly) {
+      // Look for user in MongoDB
+      user = await User.findOne({ address }).catch(() => null);
 
-    console.log(`Updating profile for address: ${address}`);
-
-    try {
-      // Try to find user in MongoDB
-      let user = await User.findOne({ address }).catch(() => null);
-
-      if (!user) {
-        console.log("User not found in MongoDB, creating new user");
-        // Create new user
-        const newUser = new User({
-          address,
-          username: name || `User_${address.substring(0, 6)}`,
-          avatarUrl:
-            image ||
-            `https://avatars.dicebear.com/api/identicon/${address}.svg`,
-          bio: bio || "NFT enthusiast and digital art collector.",
-          isVerified: false,
-        });
-
-        user = await newUser.save();
-        console.log(`New user created in MongoDB: ${user._id}`);
-      } else {
-        console.log("User found in MongoDB, updating existing user");
-        // Update existing user
-        if (name) user.username = name;
+      if (user) {
+        // Update user fields if provided
+        if (name !== undefined) user.username = name;
         if (bio !== undefined) user.bio = bio;
         if (image !== undefined) user.avatarUrl = image;
 
+        // Save user to database
         await user.save();
-        console.log(`User updated in MongoDB: ${user._id}`);
-      }
 
-      return res.status(200).json({
-        success: true,
-        message: "Profile updated successfully in MongoDB",
-        user,
-      });
-    } catch (dbError) {
-      console.error("MongoDB update failed:", dbError);
-      console.log("Falling back to in-memory storage");
-
-      // Fallback to in-memory storage
-      let user = users.find(
-        (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
-      );
-
-      if (!user) {
-        console.log("User not found in memory, creating new user");
-        // Create new user
-        user = {
-          _id: uuidv4(),
-          address,
-          username: name || `User_${address.substring(0, 6)}`,
-          avatarUrl:
-            image ||
-            `https://avatars.dicebear.com/api/identicon/${address}.svg`,
-          bio: bio || "NFT enthusiast and digital art collector.",
-          isVerified: false,
-          createdAt: new Date().toISOString(),
-        };
-        users.push(user);
-        console.log("New user created in memory");
-      } else {
-        console.log("User found in memory, updating existing user");
-        // Update existing user
-        const userIndex = users.findIndex(
-          (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
-        );
-
-        // Check if the image is a data URL (too large for console output)
-        const logSafeImage =
-          image && image.length > 100
-            ? `[Data URL length: ${image.length}]`
-            : image;
-
-        console.log("Update data:", {
-          name,
-          bio,
-          image: logSafeImage,
-          currentUsername: user.username,
-          currentBio: user.bio,
+        console.log(`User profile updated in MongoDB: ${user._id}`);
+        return res.status(200).json({
+          success: true,
+          message: "Profile updated successfully",
+          user: {
+            _id: user._id,
+            address: user.address,
+            username: user.username,
+            avatarUrl: user.avatarUrl,
+            bio: user.bio,
+            isVerified: user.isVerified || false,
+            role: user.role || "user",
+          },
         });
-
-        users[userIndex] = {
-          ...user,
-          username: name || user.username,
-          avatarUrl: image || user.avatarUrl,
-          bio: bio || user.bio,
-          updatedAt: new Date().toISOString(),
-        };
-        user = users[userIndex];
-        console.log("User updated in memory");
       }
+    }
 
-      console.log("Final user object:", {
-        _id: user._id,
-        address: user.address,
-        username: user.username,
-        bio: user.bio,
-        isVerified: user.isVerified,
-      });
+    // If not found in MongoDB or in memory-only mode, update in-memory user
+    const userIndex = users.findIndex(
+      (u) => u.address.toLowerCase() === address.toLowerCase()
+    );
+
+    if (userIndex === -1) {
+      // Create new user if not found
+      const newUser = {
+        _id: uuidv4(),
+        address,
+        username: name || address.substring(0, 8),
+        bio: bio || "",
+        avatarUrl: image || getDefaultAvatar(address),
+        isVerified: Math.random() > 0.8, // 20% chance to be verified
+        role: "user",
+      };
+
+      users.push(newUser);
+      console.log(`New user created in memory: ${newUser._id}`);
 
       return res.status(200).json({
         success: true,
-        message: "Profile updated successfully in memory",
-        user,
+        message: "Profile created successfully",
+        user: newUser,
       });
     }
+
+    // Update existing in-memory user
+    users[userIndex] = {
+      ...users[userIndex],
+      username: name || users[userIndex].username,
+      bio: bio !== undefined ? bio : users[userIndex].bio,
+      avatarUrl: image || users[userIndex].avatarUrl,
+    };
+
+    console.log(`User profile updated in memory: ${users[userIndex]._id}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      user: users[userIndex],
+    });
   } catch (error) {
-    console.error("Profile update error:", error);
+    console.error(`Error updating profile: ${error.message}`);
     return res.status(500).json({
       success: false,
       message: "Failed to update profile",
@@ -713,39 +1272,61 @@ app.post("/api/profile/update", async (req, res) => {
   }
 });
 
-// Get user profile endpoint
+// Get user profile by address
 app.get("/api/profile/:address", async (req, res) => {
-  const { address } = req.params;
+  const address = req.params.address;
   console.log(`Getting profile for address: ${address}`);
 
   try {
-    // Try to find user in MongoDB
-    const user = await User.findOne({ address }).catch(() => null);
+    // Try to find in MongoDB first
+    if (!useInMemoryOnly) {
+      const user = await User.findOne({ address }).catch(() => null);
 
-    if (user) {
-      console.log(`User found in MongoDB: ${user._id}`);
-      return res.status(200).json({
-        success: true,
-        user,
-      });
+      if (user) {
+        console.log(`User found in MongoDB: ${user._id}`);
+        return res.status(200).json({
+          success: true,
+          user: {
+            _id: user._id,
+            address: user.address,
+            username: user.username,
+            avatarUrl: user.avatarUrl,
+            bio: user.bio || "",
+            isVerified: user.isVerified || false,
+            role: user.role || "user",
+          },
+        });
+      }
     }
 
-    // If not found in MongoDB, try in-memory
-    console.log("User not found in MongoDB, checking in-memory storage");
+    // If not found in MongoDB or in memory-only mode, try in-memory
     const memoryUser = users.find(
       (u) => u.address && u.address.toLowerCase() === address.toLowerCase()
     );
 
     if (!memoryUser) {
-      console.log(`User not found with address: ${address}`);
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
+      // Create a default user if not found
+      const newUser = {
+        _id: uuidv4(),
+        address,
+        username: `User_${address.substring(0, 6)}`,
+        avatarUrl: getDefaultAvatar(address),
+        bio: "NFT enthusiast and collector",
+        isVerified: false,
+        role: "user",
+      };
+
+      // Add to memory array
+      users.push(newUser);
+
+      console.log(`New user created in memory: ${newUser._id}`);
+      return res.status(200).json({
+        success: true,
+        user: newUser,
       });
     }
 
     console.log(`User found in memory: ${memoryUser._id}`);
-
     return res.status(200).json({
       success: true,
       user: memoryUser,
@@ -760,26 +1341,133 @@ app.get("/api/profile/:address", async (req, res) => {
   }
 });
 
-// Start the server
-const PORT = process.env.PORT || 5002;
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    mode: useInMemoryOnly ? "in-memory" : "mongo-connected",
+    port: server && server.address() ? server.address().port : process.env.PORT,
+  });
+});
 
-const startServer = async () => {
+// Get all NFTs
+app.get("/api/nfts", async (req, res) => {
   try {
-    // Connect to MongoDB
-    await connectDB();
+    console.log("Getting all NFTs");
 
-    app.listen(PORT, () => {
-      console.log(`Test server running on port ${PORT}`);
-      console.log(`Test API available at: http://localhost:${PORT}`);
+    // Try to find in MongoDB first
+    let nfts = [];
+    if (!useInMemoryOnly) {
+      nfts = await NFT.find({})
+        .limit(100)
+        .catch(() => []);
+
+      if (nfts.length > 0) {
+        // Get creator profiles for these NFTs
+        const nftsWithCreatorInfo = await Promise.all(
+          nfts.map(async (nft) => {
+            const creatorProfile = nft.creator
+              ? await User.findOne({ walletAddress: nft.creator }).catch(
+                  () => null
+                )
+              : null;
+
+            const ownerProfile = nft.owner
+              ? await User.findOne({ walletAddress: nft.owner }).catch(
+                  () => null
+                )
+              : null;
+
+            return {
+              ...nft.toObject(),
+              creatorName: creatorProfile?.username || null,
+              creatorImage: creatorProfile?.avatarUrl || null,
+              creatorIsVerified: creatorProfile?.isVerified || false,
+              ownerName: ownerProfile?.username || null,
+              ownerImage: ownerProfile?.avatarUrl || null,
+              ownerIsVerified: ownerProfile?.isVerified || false,
+            };
+          })
+        );
+
+        console.log(`Found ${nftsWithCreatorInfo.length} NFTs in MongoDB`);
+        return res.json({
+          success: true,
+          nfts: nftsWithCreatorInfo,
+        });
+      }
+    }
+
+    // If not found in MongoDB or in memory-only mode, use in-memory data
+    console.log(`Using in-memory NFTs (${nfts.length} items)`);
+    return res.json({
+      success: true,
+      nfts: nfts,
     });
   } catch (error) {
-    if (error.code === "EADDRINUSE") {
-      console.warn(`Port ${PORT} is in use, trying ${Number(PORT) + 1}`);
-      process.env.PORT = String(Number(PORT) + 1);
-      startServer();
-    } else {
-      console.error(`Error starting server: ${error.message}`);
+    console.error(`Error getting all NFTs: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching NFTs",
+      error: error.message,
+    });
+  }
+});
+
+// Start the server
+const startServer = async (port = PORT, retryCount = 0) => {
+  try {
+    // Connect to MongoDB (only if we're not already in in-memory mode)
+    if (!useInMemoryOnly) {
+      const dbConnected = await connectDB();
+      if (!dbConnected) {
+        console.log("Server will operate with in-memory storage only");
+      }
     }
+
+    // Create server but don't start listening yet
+    server = app.listen(port);
+
+    // Handle server errors before it's started
+    server.on("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        const newPort = parseInt(port) + 1;
+        console.log(`Port ${port} is in use, trying port ${newPort}...`);
+
+        // Try with a new port (max 5 retries)
+        if (retryCount < 5) {
+          server = null;
+          startServer(newPort, retryCount + 1);
+        } else {
+          console.error(
+            "Failed to find an available port after multiple attempts."
+          );
+          process.exit(1);
+        }
+      } else {
+        console.error(`Server error: ${error.message}`);
+        process.exit(1);
+      }
+    });
+
+    // Once server is listening successfully
+    server.on("listening", () => {
+      const actualPort = server.address().port;
+      console.log(`Test server running on port ${actualPort}`);
+      console.log(`Test API available at: http://localhost:${actualPort}`);
+      if (useInMemoryOnly) {
+        console.log(
+          "WARNING: Using in-memory storage only - data will not persist between restarts"
+        );
+      }
+
+      // Update the app's environment with the actual port
+      process.env.PORT = actualPort;
+    });
+  } catch (error) {
+    console.error(`Server error: ${error.message}`);
+    process.exit(1);
   }
 };
 

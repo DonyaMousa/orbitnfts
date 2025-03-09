@@ -152,11 +152,12 @@ const NFTDetailsPage: React.FC = () => {
       const success = await likeNFT(nft.id);
 
       if (success) {
-        setNft((prev) => ({
+        setNft((prev: any) => ({
           ...prev,
           likes: prev.likes + 1,
           isLiked: true,
         }));
+        toast.success("NFT liked successfully!");
       }
     } catch (error) {
       console.error("Error liking NFT:", error);
@@ -372,19 +373,27 @@ const NFTDetailsPage: React.FC = () => {
                     to={`/profile/${nft.creator}`}
                     className="flex items-center space-x-2 group"
                   >
-                    <div className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 dark:border-gray-700">
+                    <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-blue-100 dark:border-blue-900 shadow-md hover:shadow-lg transition-all duration-300 hover:border-blue-300 dark:hover:border-blue-700">
                       <img
                         src={
                           nft.creatorImage ||
-                          `https://avatars.dicebear.com/api/identicon/${nft.creator}.svg`
+                          `https://api.dicebear.com/6.x/identicon/svg?seed=${nft.creator}`
                         }
-                        alt={nft.creator}
+                        alt={`${nft.creatorName || "Creator"}'s profile`}
                         className="w-full h-full object-cover"
                       />
                     </div>
-                    <span className="font-medium text-gray-800 dark:text-gray-200 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors">
-                      {nft.creatorName || shortenAddress(nft.creator)}
-                    </span>
+                    <div className="flex flex-col">
+                      <span className="font-medium text-gray-800 dark:text-gray-200 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors">
+                        {nft.creatorName || shortenAddress(nft.creator)}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        Creator{" "}
+                        {nft.creatorIsVerified && (
+                          <CheckCircle className="inline-block w-3 h-3 ml-1 text-blue-500" />
+                        )}
+                      </span>
+                    </div>
                   </Link>
                 </div>
 
@@ -396,19 +405,27 @@ const NFTDetailsPage: React.FC = () => {
                     to={`/profile/${nft.owner}`}
                     className="flex items-center space-x-2 group"
                   >
-                    <div className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 dark:border-gray-700">
+                    <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-purple-100 dark:border-purple-900 shadow-md hover:shadow-lg transition-all duration-300 hover:border-purple-300 dark:hover:border-purple-700">
                       <img
                         src={
                           nft.ownerImage ||
-                          `https://avatars.dicebear.com/api/identicon/${nft.owner}.svg`
+                          `https://api.dicebear.com/6.x/identicon/svg?seed=${nft.owner}`
                         }
-                        alt={nft.owner}
+                        alt={`${nft.ownerName || "Owner"}'s profile`}
                         className="w-full h-full object-cover"
                       />
                     </div>
-                    <span className="font-medium text-gray-800 dark:text-gray-200 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors">
-                      {nft.ownerName || shortenAddress(nft.owner)}
-                    </span>
+                    <div className="flex flex-col">
+                      <span className="font-medium text-gray-800 dark:text-gray-200 group-hover:text-purple-500 dark:group-hover:text-purple-400 transition-colors">
+                        {nft.ownerName || shortenAddress(nft.owner)}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        Owner{" "}
+                        {nft.ownerIsVerified && (
+                          <CheckCircle className="inline-block w-3 h-3 ml-1 text-purple-500" />
+                        )}
+                      </span>
+                    </div>
                   </Link>
                 </div>
               </div>

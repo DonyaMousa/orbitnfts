@@ -268,7 +268,7 @@ const mockCollections: Collection[] = [
 ];
 
 // Update all API calls to use the correct port
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5002";
 
 export const NFTProvider: React.FC<NFTProviderProps> = ({ children }) => {
   const { account, isConnected } = useWallet();

@@ -44,7 +44,7 @@ interface WalletProviderProps {
   children: ReactNode;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5002";
 
 export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
   const [account, setAccount] = useState<string | null>(null);
@@ -174,7 +174,7 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
         } catch (imgError) {
           console.error("Failed to resize image:", imgError);
           // Fall back to default avatar if image processing fails
-          processedData.avatarUrl = `https://avatars.dicebear.com/api/identicon/${account}.svg`;
+          processedData.avatarUrl = `https://api.dicebear.com/6.x/identicon/svg?seed=${account}`;
         }
       }
 

@@ -21,7 +21,7 @@ const NFTCard: React.FC<NFTCardProps> = ({
 
   // Handle different ID formats
   const getNftId = () => {
-    return nft.id || nft._id || '';
+    return nft.id || nft._id || "";
   };
 
   // Format price with 2 decimal places
@@ -135,13 +135,24 @@ const NFTCard: React.FC<NFTCardProps> = ({
             </div>
 
             <div className="flex justify-between items-center">
-              <div className="flex items-center gap-1">
-                <img
-                  src={nft.creatorImage || `https://avatars.dicebear.com/api/identicon/${nft.creator}.svg`}
-                  alt={nft.creator}
-                  className="w-5 h-5 rounded-full border border-white/20"
-                />
-                <p className="text-xs text-white/80">@{nft.creator ? nft.creator.substring(0, 6) : "unknown"}</p>
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full overflow-hidden border border-white/30 shadow-sm">
+                  <img
+                    src={
+                      nft.creatorImage ||
+                      `https://api.dicebear.com/6.x/identicon/svg?seed=${nft.creator}`
+                    }
+                    alt={
+                      nft.creatorName ||
+                      `Creator ${nft.creator?.substring(0, 6)}`
+                    }
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <p className="text-xs text-white/90 font-medium">
+                  {nft.creatorName ||
+                    `@${nft.creator ? nft.creator.substring(0, 6) : "unknown"}`}
+                </p>
               </div>
               <div>
                 <p className="text-sm font-medium text-white">

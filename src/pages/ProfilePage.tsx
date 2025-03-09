@@ -30,10 +30,21 @@ import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
 import toast from "react-hot-toast";
 import Card from "../components/ui/Card";
-import type { NFT } from "../contexts/NFTContext";
+import { NFT } from "../contexts/NFTContext";
 
-// API URL - Hardcode for now to ensure it's correct
-const API_URL = "http://localhost:5001";
+// Define interfaces locally since they're not exported from WalletContext
+interface UserProfile {
+  _id: string;
+  walletAddress: string;
+  username: string;
+  avatarUrl: string;
+  bio: string;
+  isVerified: boolean;
+  role: string;
+}
+
+// API URL - Updated to use environment variable
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5001";
 
 // Debug API URL
 console.log("Using API URL:", API_URL);
@@ -386,10 +397,10 @@ const ProfilePage: React.FC = () => {
                         <img
                           src={
                             profileImage ||
-                            `https://avatars.dicebear.com/api/identicon/${address}.svg`
+                            `https://api.dicebear.com/6.x/identicon/svg?seed=${address}`
                           }
                           alt="Profile"
-                          className="w-full h-full object-cover"
+                          className="h-full w-full object-cover"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-gray-100 dark:bg-gray-800">
@@ -621,7 +632,7 @@ const ProfilePage: React.FC = () => {
                         src={
                           imagePreview ||
                           profileImage ||
-                          `https://avatars.dicebear.com/api/identicon/${address}.svg`
+                          `https://api.dicebear.com/6.x/identicon/svg?seed=${address}`
                         }
                         alt="Profile Preview"
                         className="w-full h-full object-cover"
